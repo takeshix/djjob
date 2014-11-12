@@ -147,11 +147,14 @@ class DJBase {
                 $stmt->execute($params);
 
                 $ret = array();
-                if ($stmt->rowCount()) {
+
+                // if ($stmt->rowCount()) { // only mysql
                     // calling fetchAll on a result set with no rows throws a
                     // "general error" exception
-                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) $ret []= $r;
-                }
+                    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                        $ret []= $r;
+                    }
+                // }
 
                 $stmt->closeCursor();
                 return $ret;
@@ -198,6 +201,14 @@ class DJBase {
             printf("[%s] %s\n", date('c'), $mesg);
         }
     }
+    public static function now() {
+    	return date('Y-m-d H:i:s');
+    }
+
+		public static function intervalFromNow($sec) {
+			return date('Y-m-d H:i:s', time() + $sec);
+		}
+
 }
 
 class DJWorker extends DJBase {
@@ -258,14 +269,13 @@ class DJWorker extends DJBase {
             SELECT id
             FROM   " . self::$jobsTable . "
             WHERE  queue = ?
-            AND    (run_at IS NULL OR NOW() >= run_at)
+            AND    (run_at IS NULL OR ? >= run_at)
             AND    (locked_at IS NULL OR locked_by = ?)
             AND    failed_at IS NULL
             AND    attempts < ?
             ORDER BY created_at DESC
             LIMIT  10
-        ", array($this->queue, $this->name, $this->max_attempts));
-
+        ", array($this->queue, self::now(), $this->name, $this->max_attempts));
         // randomly order the 10 to prevent lock contention among workers
         shuffle($rs);
 
@@ -391,9 +401,9 @@ class DJJob extends DJBase {
 
         $lock = $this->runUpdate("
             UPDATE " . self::$jobsTable . "
-            SET    locked_at = NOW(), locked_by = ?
+            SET    locked_at = ?, locked_by = ?
             WHERE  id = ? AND (locked_at IS NULL OR locked_by = ?) AND failed_at IS NULL
-        ", array($this->worker_name, $this->job_id, $this->worker_name));
+        ", array(self::now(), $this->worker_name, $this->job_id, $this->worker_name));
 
         if (!$lock) {
             $this->log("[JOB] failed to acquire lock for job::{$this->job_id}", self::INFO);
@@ -424,11 +434,12 @@ class DJJob extends DJBase {
         $this->runUpdate("
             UPDATE " . self::$jobsTable . "
             SET attempts = attempts + 1,
-                failed_at = IF(attempts >= ?, NOW(), NULL),
-                error = IF(attempts >= ?, ?, NULL)
+                failed_at = CASE WHEN attempts >= ? THEN ? ELSE NULL,
+                error = CASE WHEN attempts >= ? THEN ? ELSE NULL
             WHERE id = ?",
             array(
                 $this->max_attempts,
+								self::now(),
                 $this->max_attempts,
                 $error,
                 $this->job_id
@@ -446,11 +457,11 @@ class DJJob extends DJBase {
     public function retryLater($delay) {
         $this->runUpdate("
             UPDATE " . self::$jobsTable . "
-            SET run_at = DATE_ADD(NOW(), INTERVAL ? SECOND),
+            SET run_at = ?,
                 attempts = attempts + 1
             WHERE id = ?",
             array(
-              $delay,
+              self::intervalFromNow($delay),
               $this->job_id
             )
         );
@@ -477,8 +488,8 @@ class DJJob extends DJBase {
 
     public static function enqueue($handler, $queue = "default", $run_at = null) {
         $affected = self::runUpdate(
-            "INSERT INTO " . self::$jobsTable . " (handler, queue, run_at, created_at) VALUES(?, ?, ?, NOW())",
-            array(serialize($handler), (string) $queue, $run_at)
+            "INSERT INTO " . self::$jobsTable . " (handler, queue, run_at, created_at) VALUES(?, ?, ?, ?)",
+            array(serialize($handler), (string) $queue, $run_at, self::now())
         );
 
         if ($affected < 1) {
@@ -491,13 +502,14 @@ class DJJob extends DJBase {
 
     public static function bulkEnqueue($handlers, $queue = "default", $run_at = null) {
         $sql = "INSERT INTO " . self::$jobsTable . " (handler, queue, run_at, created_at) VALUES";
-        $sql .= implode(",", array_fill(0, count($handlers), "(?, ?, ?, NOW())"));
+        $sql .= implode(",", array_fill(0, count($handlers), "(?, ?, ?, ?)"));
 
         $parameters = array();
         foreach ($handlers as $handler) {
             $parameters []= serialize($handler);
             $parameters []= (string) $queue;
             $parameters []= $run_at;
+            $parameters []= self::now();
         }
         $affected = self::runUpdate($sql, $parameters);
 
