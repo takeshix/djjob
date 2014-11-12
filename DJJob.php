@@ -214,6 +214,7 @@ class DJBase {
 class DJWorker extends DJBase {
     # This is a singleton-ish thing. It wouldn't really make sense to
     # instantiate more than one in a single request (or commandline task)
+		public $hostname = null;
 
     public function __construct($options = array()) {
         $options = array_merge(array(
@@ -225,15 +226,21 @@ class DJWorker extends DJBase {
         ), $options);
         list($this->queue, $this->count, $this->sleep, $this->max_attempts, $this->fail_on_output) =
             array($options["queue"], $options["count"], $options["sleep"], $options["max_attempts"], $options["fail_on_output"]);
-
-        list($hostname, $pid) = array(trim(`hostname`), getmypid());
-        $this->name = "host::$hostname pid::$pid";
+				$this->updateName();
 
         if (function_exists("pcntl_signal")) {
             pcntl_signal(SIGTERM, array($this, "handleSignal"));
             pcntl_signal(SIGINT, array($this, "handleSignal"));
         }
     }
+
+		public function updateName() {
+			if (empty($this->hostname)) {
+				$this->hostname = trim(`hostname`);
+			}
+      $pid = getmypid();
+      $this->name = "host::{$this->hostname} pid::$pid";
+		}
 
     public function handleSignal($signo) {
         $signals = array(
@@ -291,6 +298,7 @@ class DJWorker extends DJBase {
     }
 
     public function start() {
+			$this->updateName();
         $this->log("[JOB] Starting worker {$this->name} on queue::{$this->queue}", self::INFO);
 
         $count = 0;
@@ -433,8 +441,15 @@ class DJJob extends DJBase {
     public function finishWithError($error, $handler = null) {
         $this->runUpdate("
             UPDATE " . self::$jobsTable . "
-            SET attempts = attempts + 1,
-                failed_at = CASE WHEN attempts >= ? THEN ? ELSE NULL END,
+            SET attempts = attempts + 1
+            WHERE id = ?",
+            array(
+                $this->job_id
+            )
+        );
+        $this->runUpdate("
+            UPDATE " . self::$jobsTable . "
+            SET failed_at = CASE WHEN attempts >= ? THEN ? ELSE NULL END,
                 error = CASE WHEN attempts >= ? THEN ? ELSE NULL END
             WHERE id = ?",
             array(
@@ -544,5 +559,41 @@ class DJJob extends DJBase {
             "total"  => $total
         );
     }
+
+		public static function lockList($queue = "default") {
+			$rs = self::runQuery("
+				SELECT id, attempts, locked_by, locked_at, error, created_at FROM `" . self::$jobsTable . "`
+				WHERE locked_by IS NOT NULL
+				AND queue = ?
+				LIMIT 50
+			", array($queue));
+			return $rs;
+		}
+
+		public static function forceUnlock($locked_by, $queue = "default") {
+			return self::runUpdate("
+				UPDATE `" . self::$jobsTable . "`
+				SET locked_by = NULL, locked_at = NULL
+				WHERE locked_by = ?
+				AND queue = ?
+			", array($locked_by, $queue));
+		}
+
+		public static function forceUnlockAll($queue = "default") {
+			return self::runUpdate("
+				UPDATE `" . self::$jobsTable . "`
+			SET locked_by = NULL, locked_at = NULL
+				WHERE locked_by IS NOT NULL
+				AND queue = ?
+			", array($queue));
+		}
+
+		public static function failedList($queue = "default") {
+			return self::runQuery("
+				SELECT id, attempts, failed_at, error, created_at FROM `" . self::$jobsTable . "`
+				WHERE failed_at IS NOT NULL
+				AND queue = ?
+			", array($queue));
+		}
 
 }
