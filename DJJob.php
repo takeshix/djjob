@@ -123,8 +123,9 @@ class DJBase {
         self::$log_level = $const;
     }
 
-    public static function setConnection(PDO $db) {
+    public static function setConnection(PDO $db, $jobsTable = "jobs") {
         self::$db = $db;
+				self::$jobsTable = $jobsTable;
     }
 
     protected static function getConnection() {
