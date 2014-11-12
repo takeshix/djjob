@@ -345,7 +345,7 @@ class DJJob extends DJBase {
         try {
 
             if ($this->fail_on_output) {
-                ob_start();                
+                ob_start();
             }
 
             $handler->perform();
@@ -434,8 +434,8 @@ class DJJob extends DJBase {
         $this->runUpdate("
             UPDATE " . self::$jobsTable . "
             SET attempts = attempts + 1,
-                failed_at = CASE WHEN attempts >= ? THEN ? ELSE NULL,
-                error = CASE WHEN attempts >= ? THEN ? ELSE NULL
+                failed_at = CASE WHEN attempts >= ? THEN ? ELSE NULL END,
+                error = CASE WHEN attempts >= ? THEN ? ELSE NULL END
             WHERE id = ?",
             array(
                 $this->max_attempts,
