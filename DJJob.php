@@ -134,7 +134,7 @@ class DJBase {
                 self::$db = new PDO(self::$dsn, self::$user, self::$password);
                 self::$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             } catch (PDOException $e) {
-                throw new Exception("DJJob couldn't connect to the database. PDO said [{$e->getMessage()}]");
+                throw new DJException("DJJob couldn't connect to the database. PDO said [{$e->getMessage()}]");
             }
         }
         return self::$db;
@@ -345,7 +345,7 @@ class DJJob extends DJBase {
                 ob_end_clean();
 
                 if (!empty($output)) {
-                    throw new Exception("Job produced unexpected output: $output");
+                    throw new DJException("Job produced unexpected output: $output");
                 }
             }
 
@@ -354,6 +354,11 @@ class DJJob extends DJBase {
             return true;
 
         } catch (DJRetryException $e) {
+          	if ($this->fail_on_output) {
+              $output = ob_get_contents();
+              ob_end_clean();
+							if (!empty($output)) {$this->log("Job produced unexpected output: $output");}
+						}
             # attempts hasn't been incremented yet.
             $attempts = $this->getAttempts()+1;
 
@@ -369,6 +374,11 @@ class DJJob extends DJBase {
             return false;
 
         } catch (Exception $e) {
+        	if ($this->fail_on_output) {
+            $output = ob_get_contents();
+            ob_end_clean();
+						if (!empty($output)) {$this->log("Job produced unexpected output: $output");}
+					}
 
             $this->finishWithError($e->getMessage(), $handler);
             return false;
